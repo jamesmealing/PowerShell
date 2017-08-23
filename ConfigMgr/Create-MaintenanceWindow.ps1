@@ -47,7 +47,7 @@ param
 )
 
 #Import ConfigMgr helper Cmdlets
-Import-Module "$env:ProgramFiles\Inframon\Scripts\ConfigMgrModules.psm1"
+Import-Module "$env:ProgramFiles\ConfigMgr\Scripts\ConfigMgrModules.psm1"
 
 #Import ConfigMgr Cmdlets
 Import-Module $Env:SMS_ADMIN_UI_PATH.Replace("\bin\i386", "\bin\configurationmanager.psd1")
