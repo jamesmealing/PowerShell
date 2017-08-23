@@ -59,7 +59,7 @@ Set-Location "$($SiteCode.Name):\"
 
 #If mail SSL specified, get secure string password value from local text file and create credential object from it
 if($MailSSL) {
-    $MailPassword = Get-Content "$env:ProgramFiles\Inframon\Scripts\Config.txt" | ConvertTo-SecureString
+    $MailPassword = Get-Content "$env:ProgramFiles\ConfigMgr\Scripts\Config.txt" | ConvertTo-SecureString
     $MailCredential = New-Object -TypeName System.Management.Automation.PSCredential($MailFrom, $MailPassword)
 }
 
