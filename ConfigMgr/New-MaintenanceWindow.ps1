@@ -23,6 +23,9 @@ param
 
     [Parameter(Mandatory = $false)]
     [int]$OffSetWeeks,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$RemoveExisting,
 
     [Parameter(Mandatory = $true)]
     [string[]]$MailTo,
@@ -77,11 +80,6 @@ $MailParams = @{
     BodyAsHtml = $true
 }
 
-#Loop through each collection specified in input parameters, and remove all previous Maintenance Windows
-foreach ($Collection in $CollectionID) {
-    Remove-MaintnanceWindows -CollectionID $Collection       
-}
-
 #Get Patch Tuesday date for the current month
 $PatchTuesday = Get-PatchTuesday
 
@@ -117,6 +115,11 @@ FAILURE: Configuration Manager Maintenance Window `"$MaintenanceWindowName`" fai
 try {
     #Loop through each collection specified in input parameters, and set a new Maintenance Window
     foreach ($Collection in $CollectionID) {
+        if ($RemoveExisting) {
+            #Remove all existing Maintenance Windows
+            Remove-MaintnanceWindows -CollectionID $Collection       
+        }
+    
         #Set new Maintenance Window
         Set-MaintenanceWindow -CollectionID $Collection -MaintenanceWindowStart $MaintenanceWindowStart -MaintenanceWindowEnd $MaintenanceWindowEnd -MaintenanceWindowName $MaintenanceWindowName       
     
