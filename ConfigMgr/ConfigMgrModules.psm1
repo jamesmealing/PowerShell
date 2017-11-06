@@ -11,7 +11,7 @@ Function Get-PatchTuesday {
     )
 
     $FirstDayOfMonth = [datetime]($Month + "/1/" + $Year)
-    (0..30 | Where-Object {$FirstDayOfMonth.AddDays($_) } | Where-Object {$_.DayofWeek -like "Tue*"})[1]
+    (0..30 | ForEach-Object {$FirstDayOfMonth.AddDays($_) } | Where-Object {$_.DayofWeek -like "Tue*"})[1]
 }
 #endregion
 
