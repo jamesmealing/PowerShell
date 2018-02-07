@@ -1,7 +1,6 @@
-param
-(
+param (
     [Parameter(Mandatory = $true)]
-    [string[]]$CollectionID,
+    [string[]]$CollectionId,
 
     [Parameter(Mandatory = $true)]
     [string]$MaintenanceWindowName,
@@ -23,7 +22,7 @@ param
 
     [Parameter(Mandatory = $false)]
     [int]$OffSetWeeks,
-    
+
     [Parameter(Mandatory = $false)]
     [switch]$RemoveExisting,
 
@@ -46,22 +45,29 @@ param
     [int]$MailPort = 587,
 
     [Parameter(Mandatory = $false)]
-    [switch]$MailSSL
+    [switch]$MailSSL,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$ScomMaintenanceMode,
+
+    [Parameter(Mandatory = $false)]
+    [string]$ScomServerFQDN
 )
 
 #Import ConfigMgr helper Cmdlets
-Import-Module "$env:ProgramFiles\ConfigMgr\Scripts\ConfigMgrModules.psm1"
+Import-Module "$env:ProgramFiles\Inframon\Scripts\SCCM\ConfigMgrModules.psm1"
 
 #Import ConfigMgr Cmdlets
-Import-Module $Env:SMS_ADMIN_UI_PATH.Replace("\bin\i386", "\bin\configurationmanager.psd1")
+Import-Module $env:SMS_ADMIN_UI_PATH.Replace("\bin\i386", "\bin\configurationmanager.psd1")
+#endregion
 
 #Connect to ConfigMgr Site Code
 $SiteCode = Get-PSDrive -PSProvider CMSITE
 Set-Location "$($SiteCode.Name):\"
 
 #If mail SSL specified, get secure string password value from local text file and create credential object from it
-if($MailSSL) {
-    $MailPassword = Get-Content "$env:ProgramFiles\ConfigMgr\Scripts\Config.txt" | ConvertTo-SecureString
+if ($MailSSL) {
+    $MailPassword = Get-Content "$env:ProgramFiles\Inframon\Scripts\SCCM\MailConfig.txt" | ConvertTo-SecureString
     $MailCredential = New-Object -TypeName System.Management.Automation.PSCredential($MailFrom, $MailPassword)
 }
 
@@ -84,7 +90,7 @@ $PatchTuesday = Get-PatchTuesday
 
 #Set the default value of start date, if not otherwise specified in parameters
 if (!$StartDate) {
-    $StartDate = $PatchTuesday.AddDays($OffSetDays + $OffSetWeeks * 7).ToShortDateString()
+    $StartDate = $PatchTuesday.AddDays($OffSetDays + ($OffSetWeeks * 7)).ToShortDateString()
 }
 
 #Set the default value of end date, if not otherwise specified in parameters
@@ -118,7 +124,7 @@ try {
             #Remove all existing Maintenance Windows
             Remove-MaintnanceWindows -CollectionID $Collection       
         }
-    
+
         #Set new Maintenance Window
         Set-MaintenanceWindow -CollectionID $Collection -MaintenanceWindowStart $MaintenanceWindowStart -MaintenanceWindowEnd $MaintenanceWindowEnd -MaintenanceWindowName $MaintenanceWindowName       
     
@@ -127,6 +133,72 @@ try {
 
         #Add collection name to Mail Body parameter
         $MailBodySuccess += "<i>$CollectionName</i></br>"
+
+        #If specified, create scheduled tasks to start SCOM Maintenance Mode
+        if ($ScomMaintenanceMode) {
+            #Create the here-string for the 'Start-ScomMaintenanceMode' script
+            $StartScomMaintenanceMode = @"
+###SCRIPT AUTOMATICALLY GENERATED FROM "New-MaintenanceWindow.ps1" SCRIPT###
+
+#Get the list of devices in the collection
+try {
+    `$CollectionMembers = (Get-WmiObject -ComputerName "$env:COMPUTERNAME" -Namespace "ROOT\SMS\site_$SiteCode" -Query "SELECT * FROM SMS_FullCollectionMembership WHERE CollectionID='$($Collection)'").Name
+}
+catch {
+    throw "Error getting the members from the collection $Collection"
+}
+
+#Create a PSRemoting session to the SCOM server
+try {
+    `$Session = New-PSSession -ComputerName "$ScomServerFQDN" -UseSSL -ErrorAction Stop
+}
+catch {
+    throw "Unable to establish PSRemoting session to $ScomServerFQDN"
+}
+
+#Loop through each server in the collection and start SCOM Maintenance Mode for the duration of the ConfigMgr Maintenance Window
+foreach (`$Server in `$CollectionMembers) {
+    Invoke-Command -Session `$Session -ScriptBlock {
+        Import-Module OperationsManager
+        Start-SCOMMaintenanceMode -Instance (Get-SCOMClassInstance -Name "`$using:Server.*") -EndTime "$($MaintenanceWindowEnd.AddMinutes(10).ToString())" -Comment "Scheduled Maintenance Mode for Configuration Manager Maintenance Window" -Reason "PlannedOther"
+    }    
+}
+
+#Close PSRemoting session
+try {
+    Get-PSSession | Remove-PSSession
+}
+catch {
+    throw "Error removing PSSession"
+}
+"@
+
+            $TaskName = "SCOM Maintenance Mode - $Collection - $MaintenanceWindowName"
+            $TaskPath = "Inframon\Operations Manager\Maintenance Mode"
+            $TaskUser = "SVC-CM-Automation"
+            $SecurePassword = Get-Content "$env:ProgramFiles\Inframon\Scripts\SCCM\TaskConfig.txt" | ConvertTo-SecureString
+            $ScriptName = Start-ScomMaintenanceMode-$Collection-$($MaintenanceWindowName.Replace(' ', '')).ps1
+            $ScriptPath = "$env:ProgramFiles\Inframon\Scripts\SCOM\Maintenance Mode"
+
+            #Due to the 'Register-ScheduledTask' cmdlet not accepting 'SecureString' as an input for password, we need to create a new credential object and use this to lookup the plaintext password.
+            #This is still better than having the plaintext password directly in the script, however, this is obviously less than ideal but sadly we have little choice.
+            $TaskCredentials = New-Object System.Management.Automation.PSCredential -ArgumentList $TaskUser, $SecurePassword
+            $TaskPassword = $TaskCredentials.GetNetworkCredential().Password
+
+            #Define the action, trigger and settings of the Scheduled Task
+            $TaskAction = New-ScheduledTaskAction -Execute "$env:windir\System32\WindowsPowerShell\v1.0\PowerShell.exe" -Argument "-File `"$ScriptPath\$ScriptName"
+            $TaskTrigger = New-ScheduledTaskTrigger -Once -At ([DateTime]::SpecifyKind("$MaintenanceWindowStart", [DateTimeKind]::Local).AddMinutes(-5))
+            $TaskSettings = New-ScheduledTaskSettingsSet -Compatibility Win8 -ExecutionTimeLimit "01:00:00"
+
+            #Create 'Start-ScomMaintenanceMode' PowerShell Script for the Scheduled Task from the here-string created above
+            Set-Content -Path "$ScriptPath\$ScriptName" -Value $StartScomMaintenanceMode
+
+            #Check for an existing Scheduled Task, if found, delete it
+            Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false | Out-Null
+
+            #Create and register the Scheduled Task using the action, trigger and settings defined above
+            Register-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Action $TaskAction -Settings $TaskSettings -Trigger $TaskTrigger -User $TaskUser -Password $TaskPassword | Out-Null
+        }
     }
 
     #Send completion email
@@ -143,10 +215,22 @@ catch {
     #Send failure email
     if ($MailSSL) {
         #Use secure SSL authentication
-        Send-MailMessage @MailParams -Cc $MailToFailure -Body $MailBodyFailure -Priority "High" -Credential $MailCredential -UseSsl
+        if ($MailToFailure) {
+            #Include Cc to '$MailToFailure'
+            Send-MailMessage @MailParams -Cc $MailToFailure -Body $MailBodyFailure -Priority "High" -Credential $MailCredential -UseSsl    
+        }
+        else {
+            Send-MailMessage @MailParams -Body $MailBodyFailure -Priority "High" -Credential $MailCredential -UseSsl
+        }
     }
     else {
         #Use anonymous authentication
-        Send-MailMessage @MailParams -Cc $MailToFailure -Body $MailBodyFailure -Priority "High"
+        if ($MailToFailure) {
+            #Include Cc to '$MailToFailure'
+            Send-MailMessage @MailParams -Cc $MailToFailure -Body $MailBodyFailure -Priority "High"    
+        }
+        else {
+            Send-MailMessage @MailParams -Body $MailBodyFailure -Priority "High"
+        }
     }
 }
