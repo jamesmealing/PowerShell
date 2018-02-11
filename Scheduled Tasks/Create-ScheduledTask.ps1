@@ -1,5 +1,5 @@
 #Create the here-string for the local script
-$MyScheduledTaskScript = @"
+$myScheduledTaskScript = @"
     Write-Output "Hello World"
 "@
 
@@ -20,7 +20,7 @@ $taskPassword = $taskCredentials.GetNetworkCredential().Password
 
 #Check the Script Path directory exists, and create it if not
 if (!(Test-Path $scriptPath)) {
-    New-Item -Path $scriptPath -ItemType Directory | Out-Null
+    New-Item -Path $scriptPath -ItemType Directory
 }
 
 #Create the local PowerShell Script for the Scheduled Task from the here-string created above
@@ -31,15 +31,21 @@ if ($osVersion -ge 6.3) {
     #Define the actions of the Scheduled Task
     $taskActions = New-ScheduledTaskAction -Execute "$env:windir\System32\WindowsPowerShell\v1.0\PowerShell.exe" -Argument "-File `"$scriptPath\$scriptName`""
 
+    #Define the trigger for the Scheduled Task
+    #$taskTrigger = New-ScheduledTaskTrigger -Once -At ([DateTime]::SpecifyKind("11/02/2018 12:00", [DateTimeKind]::Local))
+
     #Define the settings of the Scheduled Task
     $taskSettings = New-ScheduledTaskSettingsSet -Compatibility Win7 -ExecutionTimeLimit "08:00:00"
     
     #Check for an existing instance of the Scheduled Task, if found, delete it
-    Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Unregister-ScheduledTask -TaskName $taskName -Confirm:$false | Out-Null
-        
-    #Register the Scheduled Task using the actions and settings defined above
-    Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Description $taskDescription -Action $taskActions -Settings $taskSettings -User $taskUser -Password $taskPassword -RunLevel Highest -Verbose 4>&1 | Out-Null
+    Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     
+    #Register the Scheduled Task using the actions and settings defined above
+    Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Description $taskDescription -Action $taskActions -Settings $taskSettings -User $taskUser -Password $taskPassword -RunLevel Highest
+    
+    #Register the Scheduled Task using the action, trigger and settings defined above
+    #Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Settings $taskSettings -Trigger $taskTrigger -User $taskUser -Password $taskPassword -RunLevel Highest
+
     #Execute the Scheduled Task
     Start-ScheduledTask -TaskName $taskName -TaskPath $taskPath
     
@@ -76,13 +82,19 @@ else {
     $taskActions.Path = "$env:windir\System32\WindowsPowerShell\v1.0\PowerShell.exe"
     $taskActions.Arguments = "-File `"$scriptPath\$scriptName`""
 
+    #Define the trigger for the Scheduled Task
+    #$taskTrigger = $taskDefinition.Triggers.Create(1)
+    #$taskTrigger.Enabled = $true
+    #Start boundary '2018-02-11T12:00:00-08:00' equals "11th February 2018 at midday in UTC/GMT time zone" (See MSDN for full details; https://msdn.microsoft.com/en-us/library/windows/desktop/aa383967(v=vs.85).aspx)
+    #$taskTrigger.StartBoundary = "2018-02-11T12:00:00+00:00"
+    
     #Define the settings of the Scheduled Task
     $taskSettings = $taskDefinition.Settings
     #Compatability '3' eqauls "Windows 7, Windows Server 2008 R2" (See MSDN for full details; https://msdn.microsoft.com/en-us/library/windows/desktop/aa383486(v=vs.85).aspx)
     $taskSettings.Compatibility = 3
     #Execution time limit 'PT8H' equals "08:00:00" hours (See MSDN for full details; https://msdn.microsoft.com/en-us/library/windows/desktop/aa383497(v=vs.85).aspx)
     $taskSettings.ExecutionTimeLimit = "PT8H"
-        
+    
     #Define the registration info of the Scheduled Task
     $taskRegistration = $taskDefinition.RegistrationInfo
     $taskRegistration.Description = $taskDescription
@@ -108,15 +120,15 @@ else {
     catch {
         #Scheduled Task doesn't already exist, so we don't need to do anything 
     }
-
+    
     #Register the Scheduled Task using the actions and settings defined above
-    $taskFolder.RegisterTaskDefinition($taskName, $taskDefinition, 2, $taskUser, $taskPassword, 1) | Out-Null
+    $taskFolder.RegisterTaskDefinition($taskName, $taskDefinition, 2, $taskUser, $taskPassword, 1)
 
     #Execute the Scheduled Task
     $taskRun = $taskFolder.GetTask($taskName)
-    $taskRun.Run(0) | Out-Null
+    $taskRun.Run(0)
     
-    #Sleep for 10 seconds to ensure the Scheduled Task has time to start running before we check it's status
+    #Sleep for 10 seconds to ensure the Scheduled Task has time to start running before we check it's status (COM objects seem to take longer to register and execute than when using the native cmdlets)
     Start-Sleep -Seconds 10
 
     #Check the Scheduled Task state to see when it finishes running
